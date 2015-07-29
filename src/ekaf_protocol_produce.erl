@@ -118,6 +118,7 @@ encode_message_set(_) ->
     <<>>.
 
 % Message => Crc MagicByte Attributes Key Value
+%
 %   Crc => int32
 %   MagicByte => int8
 %   Attributes => int8
@@ -198,7 +199,7 @@ decode_to_partitions(0, Packet, Previous)->
 decode_to_partitions(Counter, Packet, Previous) ->
     {Next,Rest} = decode_to_partition(Packet),
     decode_to_partitions(Counter-1, Rest, [Next|Previous]).
-decode_to_partition(<<Id:8, ErrorCode:16, Offset/binary>>)->
-    {#partition{ id = Id, error_code = ErrorCode }, Offset};
+decode_to_partition(<<Id:32, ErrorCode:16, _Offset:64, Rest/binary>>)->
+    {#partition{ id = Id, error_code = ErrorCode }, Rest};
 decode_to_partition(Rest)->
     {#partition{},Rest}.
