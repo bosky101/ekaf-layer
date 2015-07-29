@@ -152,7 +152,8 @@ handle_async_as_batch(BatchEnabled, {_, Messages}, PrevState)->
     FinalMessages = case Messages of Bin when is_binary(Bin)-> Bin; _ -> lists:reverse(Messages) end,
     {MessageSets,State} = ekaf_lib:cursor(BatchEnabled, FinalMessages, PrevState),
     spawn_async_as_batch(BatchEnabled,MessageSets, State),
-    fsm_next_state(ready, State, State#ekaf_fsm.buffer_ttl).
+    KV=dict:append({cor_id, State#ekaf_fsm.cor_id}, {?EKAF_PACKET_DECODE_PRODUCE_ASYNC_BATCH, undefined}, State#ekaf_fsm.kv),
+    fsm_next_state(ready, State#ekaf_fsm{kv=KV}, State#ekaf_fsm.buffer_ttl).
 
 spawn_async_as_batch(_,[],_)->
     ok;
