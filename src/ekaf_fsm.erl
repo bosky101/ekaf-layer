@@ -242,14 +242,14 @@ handle_sync_event(_Event, _From, StateName, State) ->
 %%          {next_state, NextStateName, NextStateData, Timeout} |
 %%          {stop, Reason, NewStateData}
 %%--------------------------------------------------------------------
-handle_incoming(<<CorrelationId:32,_/binary>> = Packet, #ekaf_fsm{ kv = KV } = State)->
+handle_incoming(<<CorrelationId:32,_/binary>> = Packet, #ekaf_fsm{ kv = KV, topic=TopicName, partition=PartitionId} = State)->
     Found = dict:find({cor_id,CorrelationId}, KV),
     case Found of
         {ok,[{Type,From}|_Rest]}->
+            DecodedResponse = ekaf_protocol:decode_produce_response(Packet),
             case Type of
                 ?EKAF_PACKET_DECODE_PRODUCE ->
-                    Reply = {{sent, State#ekaf_fsm.partition, self()},
-                             ekaf_protocol:decode_produce_response(Packet)},
+                    Reply = {{sent, State#ekaf_fsm.partition, self()}, DecodedResponse},
                     gen_fsm:reply(From, Reply);
                 ?EKAF_PACKET_DECODE_PRODUCE_ASYNC_BATCH ->
                     ekaf_lib:flushed_messages_replied_callback(State, Packet),
@@ -257,10 +257,28 @@ handle_incoming(<<CorrelationId:32,_/binary>> = Packet, #ekaf_fsm{ kv = KV } = S
                 _TE ->
                     ok
             end,
+            %% Each worker is sending messages for a single partition anyway, so if there
+            %% is a single error here, we should stop the worker.
+            case check_if_no_longer_leader(DecodedResponse, TopicName, PartitionId) of
+                true ->
+                    #ekaf_fsm{broker = Broker, socket = Socket} = State,
+                    ?INFO_MSG("No longer leader. Closing socket. Partition = ~p, Topic = ~p, Broker = ~p", [PartitionId, TopicName, Broker]),
+                    ekaf_socket:close(Socket);
+                _ -> ok
+            end,
             State#ekaf_fsm{ kv = dict:erase({cor_id,CorrelationId}, KV) };
         _E->
             State
     end.
+
+check_if_no_longer_leader(Response, TopicName, PartitionId) ->
+    %% ErrorCode = 6: NotLeaderForPartition, ErrorCode = 5: LeaderNotAvailable
+    #produce_response{topics=Topics} = Response,
+    ErrorCodes =
+        [[ErrorCode || #partition{error_code=ErrorCode, id=Partition} <- Partitions,
+                       ErrorCode =:= 6 orelse ErrorCode =:= 5, Partition =:= PartitionId] %% 6 -> No longer 
+            || #topic{name=Topic, partitions=Partitions} <- Topics, Topic =:= TopicName],
+    length(lists:flatten(ErrorCodes)) > 0.
 
 handle_info({tcp, _Port, Packet}, ready, State) ->
     Next = handle_incoming(Packet, State),
