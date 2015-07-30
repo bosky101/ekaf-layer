@@ -51,6 +51,27 @@ metadata2()->
                            || Topic <- Topics]
               }.
 
+metadata3()->
+    Topics = [?TEST_TOPIC],
+    #kafkamocker_metadata{
+               brokers = [ #kafkamocker_broker{ id = 1, host = "localhost", port = 9907 },
+                           #kafkamocker_broker{ id = 2, host = "localhost", port = 9908 }
+                         ],
+               topics =  [ #kafkamocker_topic { name = Topic,
+                                                partitions = [
+                                                              #kafkamocker_partition {id = 1, leader = 1,
+                                                                                       replicas = [#kafkamocker_replica{ id = 1 }],
+                                                                                       isrs = [#kafkamocker_isr{ id = 1 }]
+                                                                                      },
+                                                              #kafkamocker_partition {id = 0, leader = 2,
+                                                                                       replicas = [#kafkamocker_replica{ id = 1 }],
+                                                                                       isrs = [#kafkamocker_isr{ id = 1 }]
+                                                                                      }
+                                                              ]
+                                               }
+                           || Topic <- Topics]
+              }.
+
 pick_test_() ->
     {timeout, 15000, {setup,
      fun() ->
@@ -60,20 +81,16 @@ pick_test_() ->
              erlang:register(kafka_consumer, Pid),
              [application:load(X) ||X<- [kafkamocker, ekaf] ],
 
-             % start a kafka broker on 9908
+    % start a kafka broker on 9908
              application:set_env(kafkamocker, kafkamocker_callback, kafka_consumer),
              application:set_env(kafkamocker, kafkamocker_bootstrap_topics, [Topic]),
              application:set_env(kafkamocker, kafkamocker_bootstrap_broker, {"localhost",9907}),
 
              application:set_env(ekaf, ?EKAF_CALLBACK_WORKER_UP, {?MODULE,callback}),
              application:set_env(ekaf, ?EKAF_CALLBACK_WORKER_DOWN, {?MODULE,callback}),
-             application:set_env(ekaf, ?EKAF_CALLBACK_MAX_DOWNTIME_BUFFER_REACHED, {?MODULE, callback}),
-
              application:set_env(ekaf, ekaf_per_partition_workers, 1),
              application:set_env(ekaf, ekaf_bootstrap_broker, {"localhost",9907}),
              application:set_env(ekaf, ekaf_buffer_ttl, 10),
-             application:set_env(ekaf, ekaf_max_downtime_buffer_size, 5),
-
              [ application:start(App) || App <- [gproc, ranch, kafkamocker]],
              kafkamocker_fsm:start_link({metadata, metadata1()}),
              [ application:start(App) || App <- [ekaf]],
@@ -84,11 +101,11 @@ pick_test_() ->
              ok
      end,
      [
-       {timeout, 5, ?_test(?debugVal(t_pick_from_new_pool()))}
+      {timeout, 5, ?_test(?debugVal(t_pick_from_new_pool()))}
       , ?_test(t_is_clean())
       , {spawn, ?_test(?debugVal(t_request_metadata()))}
       , ?_test(t_is_clean())
-      ,{spawn, ?_test(?debugVal(t_request_worker_state()))}
+      ,{spawn, ?_test(?debugVal(t_request_info()))}
       , ?_test(t_is_clean())
 
       ,{spawn, ?_test(?debugVal(t_produce_sync_to_topic()))}
@@ -108,12 +125,7 @@ pick_test_() ->
       , ?_test(t_is_clean())
       ,{spawn, ?_test(?debugVal(t_produce_async_multi_in_batch_to_topic()))}
       , ?_test(t_is_clean())
-
-      , {spawn, ?_test(?debugVal(t_max_messages_to_save_during_kafka_downtime()))}
-      , ?_test(t_is_clean())
-      , {spawn, ?_test(?debugVal(t_restart_kafka_broker()))}
-      , ?_test(t_is_clean())
-      ,{spawn, ?_test(?debugVal(t_change_kafka_config()))}
+      , {spawn, ?_test(t_produce_async_to_topic_with_partition_change())}
       , ?_test(t_is_clean())
       ]}}.
 
@@ -146,7 +158,7 @@ t_request_metadata()->
     ?assertEqual( length(Metadata1#metadata_response.brokers), 1),
     ok.
 
-t_request_worker_state()->
+t_request_info()->
     ?assertMatch(#ekaf_fsm{}, ekaf:info(?TEST_TOPIC)),
     ok.
 
@@ -202,6 +214,34 @@ t_produce_async_to_topic()->
         {flush, [X]}->
             ?assertEqual(Sent, X)
     end,
+    ok.
+
+t_produce_async_to_topic_with_partition_change() ->
+    Sent = <<"5.async1">>,
+    Response  = ekaf:produce_async(?TEST_TOPIC, Sent),
+    ?assertMatch(ok,Response),
+    timer:sleep(300),
+
+    kafka_consumer ! {flush, 1, self()},
+    receive
+        {flush, [X1]}->
+            ?assertEqual(Sent, X1)
+    end,
+
+    kafkamocker:update_metadata(metadata3()),
+    timer:sleep(100),
+
+    Response2  = ekaf:produce_async(?TEST_TOPIC, Sent),
+    ?assertMatch(ok,Response2),
+    timer:sleep(100),
+
+    kafka_consumer ! {flush, 1, self()},
+    receive
+        {flush, [X2]}->
+            ?assertEqual({error, invalid_leader}, X2)
+    end,
+    %% Reset metadata
+    Rsp = kafkamocker:update_metadata(metadata1()),
     ok.
 
 t_produce_async_multi_to_topic()->
@@ -284,35 +324,6 @@ t_change_kafka_config()->
     ?assertEqual( length(Metadata2#metadata_response.brokers), 3),
     ok.
 
-t_max_messages_to_save_during_kafka_downtime()->
-    kafka_consumer ! {flush, 1, self()},
-    gen_fsm:send_event(kafkamocker_fsm, {broker, stop, #kafkamocker_broker{ id = 1, host = "localhost", port = 9907 }}),
-    receive
-        {flush, X1}->
-            ?assertEqual([?EKAF_CALLBACK_WORKER_DOWN],X1)
-    end,
-
-    % %% sent 10 messages when broker was down
-    Sent = [ <<(ekaf_utils:itob(X))/binary,". max downtime messages">> || X<- lists:seq(32,41)],
-    ekaf:produce_async_batched(?TEST_TOPIC, Sent),
-
-
-    %% start broker, get up message
-    gen_fsm:send_event(kafkamocker_fsm, {broker, start, #kafkamocker_broker{ id = 1, host = "localhost", port = 9907 }}),
-    kafka_consumer ! {flush, 2, self()},
-    receive
-        {flush, X2}->
-            ?assertEqual([?EKAF_CALLBACK_MAX_DOWNTIME_BUFFER_REACHED,?EKAF_CALLBACK_WORKER_UP],X2)
-    end,
-
-    %% broker should get only max_downtime_buffer_size messages
-    kafka_consumer ! {flush, 5, self()},
-    receive
-        {flush, X3}->
-            ?assertEqual(5,length(X3))
-    end,
-    ok.
-
 t_is_clean()->
     ok.
 
@@ -321,9 +332,10 @@ kafka_consumer_loop(Acc,{From,Stop}=Acc2)->
         {stop, N}->
             kafka_consumer_loop(Acc, {From,N});
         stop ->
+            ?debugFmt("kafka_consumer_loop stopping",[]),
             ok;
         {flush, NewFrom} ->
-            %?debugFmt("asked to flush when consumer got ~p items",[Acc]),
+            ?debugFmt("asked to flush when consumer got ~p items",[Acc]),
             % kafka_consumer_loop should flush
             NewFrom ! {flush, Acc },
             kafka_consumer_loop([], {NewFrom,0});
@@ -345,8 +357,7 @@ kafka_consumer_loop(Acc,{From,Stop}=Acc2)->
             %kafka_consumer_loop should reply
             From ! {info, Acc },
             kafka_consumer_loop(Acc, Acc2);
-        {produce,X} ->
-            %?debugFmt("~p kafka_consumer_loop INCOMING ~p, stop at ~p",[ekaf_utils:epoch(), X, Stop]),
+        {produce, [?EKAF_CALLBACK_WORKER_UP]=X} -> 
             Next = Acc++X,
             Next2 =
                 case length(Next) of
@@ -358,9 +369,48 @@ kafka_consumer_loop(Acc,{From,Stop}=Acc2)->
                         Next
                 end,
             kafka_consumer_loop(Next2, Acc2);
+        {produce, [?EKAF_CALLBACK_WORKER_DOWN]=X} ->
+            Next = Acc++X,
+            Next2 =
+                case length(Next) of
+                    Stop ->
+                        %?debugFmt("reply to ~p since ~p",[From, length(Next)]),
+                        From ! {flush, Next },
+                        [];
+                    _ ->
+                        Next
+                end,
+            kafka_consumer_loop(Next2, Acc2);
+        {produce, Response} ->
+            ?debugVal(Response),
+            X = lists:flatten([to_error_or_msg(Response)]),
+            %?debugFmt("~p kafka_consumer_loop INCOMING ~p",[ekaf_utils:epoch(), X]),
+            Next = Acc++X,
+            Next2 =
+                case length(Next) of
+                    Stop ->
+                        %?debugFmt("reply to ~p since ~p",[From, length(Next)]),
+                        From ! {flush, Next},
+                        [];
+                    _ ->
+                        Next
+                end,
+            kafka_consumer_loop(Next2, Acc2);
         _E ->
             ?debugFmt("kafka_consumer_loop unexp: ~p",[_E]),
             kafka_consumer_loop(Acc, Acc2)
     end.
 
+to_error_or_msg(Response) ->
+    case check_response_if_no_longer_leader(Response, ?TEST_TOPIC, 0) of
+        true -> {error, invalid_leader};
+        _ -> kafkamocker:produce_request_to_messages(Response)
+    end.
+
+check_response_if_no_longer_leader(Response, TopicName, PartitionId) ->
+    #kafkamocker_produce_request{topics=Topics} = Response,
+    ErrorCodes =
+        [[ErrorCode || #kafkamocker_partition{error_code=ErrorCode} <- Partitions, ErrorCode =/= 0]
+            || #kafkamocker_topic{name=Topic, partitions=Partitions} <- Topics, Topic =:= TopicName],
+    length(lists:flatten(ErrorCodes)) > 0.
 -endif.
