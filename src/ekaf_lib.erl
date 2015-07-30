@@ -27,7 +27,9 @@
          %% helpers
          data_to_message_sets/1, data_to_message_set/1,response_to_proplist/1,
          add_message_to_buffer/2, pop_messages_from_buffer/2, add_messages_to_sent/2,
-         flush_messages_callback/1, flushed_messages_replied_callback/2
+         flush_messages_callback/1, flushed_messages_replied_callback/2,
+
+         check_response_if_no_longer_leader/3
 ]).
 
 prepare(Topic)->
@@ -421,3 +423,12 @@ fsm_next_state(StateName,State)->
     {next_state, StateName, State}.
 fsm_next_state(StateName, State, Timeout)->
     {next_state, StateName, State, Timeout}.
+
+check_response_if_no_longer_leader(Response, TopicName, PartitionId) ->
+    %% ErrorCode = 6: NotLeaderForPartition, ErrorCode = 5: LeaderNotAvailable
+    #produce_response{topics=Topics} = Response,
+    ErrorCodes =
+        [[ErrorCode || #partition{error_code=ErrorCode, id=Partition} <- Partitions,
+                       ErrorCode =:= 6 orelse ErrorCode =:= 5, Partition =:= PartitionId] %% 6 -> No longer 
+            || #topic{name=Topic, partitions=Partitions} <- Topics, Topic =:= TopicName],
+    length(lists:flatten(ErrorCodes)) > 0.

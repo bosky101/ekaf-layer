@@ -259,7 +259,7 @@ handle_incoming(<<CorrelationId:32,_/binary>> = Packet, #ekaf_fsm{ kv = KV, topi
             end,
             %% Each worker is sending messages for a single partition anyway, so if there
             %% is a single error here, we should stop the worker.
-            case check_if_no_longer_leader(DecodedResponse, TopicName, PartitionId) of
+            case ekaf_lib:check_response_if_no_longer_leader(DecodedResponse, TopicName, PartitionId) of
                 true ->
                     #ekaf_fsm{broker = Broker, socket = Socket} = State,
                     ?INFO_MSG("No longer leader. Closing socket. Partition = ~p, Topic = ~p, Broker = ~p", [PartitionId, TopicName, Broker]),
@@ -270,15 +270,6 @@ handle_incoming(<<CorrelationId:32,_/binary>> = Packet, #ekaf_fsm{ kv = KV, topi
         _E->
             State
     end.
-
-check_if_no_longer_leader(Response, TopicName, PartitionId) ->
-    %% ErrorCode = 6: NotLeaderForPartition, ErrorCode = 5: LeaderNotAvailable
-    #produce_response{topics=Topics} = Response,
-    ErrorCodes =
-        [[ErrorCode || #partition{error_code=ErrorCode, id=Partition} <- Partitions,
-                       ErrorCode =:= 6 orelse ErrorCode =:= 5, Partition =:= PartitionId] %% 6 -> No longer 
-            || #topic{name=Topic, partitions=Partitions} <- Topics, Topic =:= TopicName],
-    length(lists:flatten(ErrorCodes)) > 0.
 
 handle_info({tcp, _Port, Packet}, ready, State) ->
     Next = handle_incoming(Packet, State),
