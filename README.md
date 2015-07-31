@@ -251,13 +251,23 @@ Features you gain by using ekaf for pushing to kafka:
 
 Current callbacks include when the buffer is flushed.
 
-    {ekaf,[
-        {ekaf_callback_flush, {mystats, callback_flush}}
-        %% where the callback is fun mystats:callback_flush/5
-    ]}.
+    %% SET CALLBACKS from your app
+    %% here are the various callbacks that you can listen to
+    %% more info in the ekaf/include/ekaf_definitions.hrl file
+    application:set_env(ekaf, ?EKAF_CALLBACK_FLUSH,  {ekaf_demo, demo_callback}),
+    application:set_env(ekaf, ?EKAF_CALLBACK_FLUSHED_REPLIED, {ekaf_demo, demo_callback}),
+    application:set_env(ekaf, ?EKAF_CALLBACK_WORKER_DOWN, {ekaf_demo, demo_callback}),
+    application:set_env(ekaf, ?EKAF_CALLBACK_WORKER_UP, {ekaf_demo, demo_callback}),
+    application:set_env(ekaf, ?EKAF_CALLBACK_DOWNTIME_SAVED, {ekaf_demo, demo_callback}),
+    application:set_env(ekaf, ?EKAF_CALLBACK_DOWNTIME_REPLAYED, {ekaf_demo, demo_callback}),
+    application:set_env(ekaf, ?EKAF_CALLBACK_TIME_TO_CONNECT, {ekaf_demo, demo_callback}),
+    application:set_env(ekaf, ?EKAF_CALLBACK_TIME_DOWN, {ekaf_demo, demo_callback}),
+    application:set_env(ekaf, ?EKAF_CALLBACK_MAX_DOWNTIME_BUFFER_REACHED, {ekaf_demo, demo_callback}),
+    application:set_env(ekaf, ?EKAF_CALLBACK_PARTITION_NO_LONGER_LEADER, {ekaf_demo, demo_callback}),
 
-    %% mystats.erl
-    callback_flush(Topic, Broker, PartitionId, BufferLength, From, CorId)->
+
+    %% in this case the callback is ekaf_demo.erl
+    demo_callback(Topic, Broker, PartitionId, BufferLength, From, CorId)->
         spawn(fun()->
                   %io:format("~n flush broker: ~p partition ~p when size was ~p corid ~p worker: ~p",[Broker, PartitionId, Len, CorId, From]),
                   % eg:          flush partition 0, when size was 5025 corid 8899

@@ -52,6 +52,7 @@ demo()->
     application:set_env(ekaf, ?EKAF_CALLBACK_TIME_TO_CONNECT, {ekaf_demo, demo_callback}),
     application:set_env(ekaf, ?EKAF_CALLBACK_TIME_DOWN, {ekaf_demo, demo_callback}),
     application:set_env(ekaf, ?EKAF_CALLBACK_MAX_DOWNTIME_BUFFER_REACHED, {ekaf_demo, demo_callback}),
+    application:set_env(ekaf, ?EKAF_CALLBACK_PARTITION_NO_LONGER_LEADER, {ekaf_demo, demo_callback}),
 
     %% SET STRATEGY AND CONCURRENCY OPTIONS
     application:set_env(ekaf, ekaf_partition_strategy, strict_round_robin),
@@ -102,6 +103,9 @@ demo_callback(Event, _From, _StateName,
                 _ ->
                     ok
             end;
+        ?EKAF_CALLBACK_PARTITION_NO_LONGER_LEADER ->
+            io:format("~n ~s 1",[Stat]),
+            ok;
         _ ->
             ?INFO_MSG("ekaf_fsm callback got ~p ~p",[Event, Extra])
     end;
