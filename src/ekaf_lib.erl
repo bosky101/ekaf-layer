@@ -28,6 +28,7 @@
          data_to_message_sets/1, data_to_message_set/1,response_to_proplist/1,
          add_message_to_buffer/2, pop_messages_from_buffer/2, add_messages_to_sent/2,
          flush_messages_callback/1, flushed_messages_replied_callback/2,
+         partition_no_longer_leader_callback/2,
 
          check_response_if_no_longer_leader/3
 ]).
@@ -275,6 +276,21 @@ flushed_messages_replied_callback(State, Packet)->
                           ok
                   end
           end).
+
+default_callback(CallbackName, Self, StateName, State, Packet)->
+    spawn(fun()->
+                  Callback = ekaf_callbacks:find(CallbackName),
+                  case Callback of
+                      {CallbackModule,CallbackFunction} ->
+                          CallbackModule:CallbackFunction(CallbackName, Self, StateName, State, Packet);
+                      undefined ->
+                          ok
+                  end
+          end).
+
+partition_no_longer_leader_callback(State, Packet)->
+    default_callback(?EKAF_CALLBACK_PARTITION_NO_LONGER_LEADER, self(), ready, State, Packet).
+
 
 response_to_proplist({{sent,_,_},Response})->
     response_to_proplist(Response);

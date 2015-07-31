@@ -261,9 +261,8 @@ handle_incoming(<<CorrelationId:32,_/binary>> = Packet, #ekaf_fsm{ kv = KV, topi
             %% is a single error here, we should stop the worker.
             case ekaf_lib:check_response_if_no_longer_leader(DecodedResponse, TopicName, PartitionId) of
                 true ->
-                    #ekaf_fsm{broker = Broker, socket = Socket} = State,
-                    ?INFO_MSG("No longer leader. Closing socket. Partition = ~p, Topic = ~p, Broker = ~p", [PartitionId, TopicName, Broker]),
-                    ekaf_socket:close(Socket);
+                    ekaf_lib:partition_no_longer_leader_callback(State, Packet),
+                    ekaf_socket:close(State#ekaf_fsm.socket);
                 _ -> ok
             end,
             State#ekaf_fsm{ kv = dict:erase({cor_id,CorrelationId}, KV) };
