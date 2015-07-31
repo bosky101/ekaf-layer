@@ -27,7 +27,9 @@
          %% helpers
          data_to_message_sets/1, data_to_message_set/1,response_to_proplist/1,
          add_message_to_buffer/2, pop_messages_from_buffer/2, add_messages_to_sent/2,
-         flush_messages_callback/1, flushed_messages_replied_callback/2
+         flush_messages_callback/1, flushed_messages_replied_callback/2,
+
+         check_response_if_no_longer_leader/3
 ]).
 
 prepare(Topic)->    
@@ -153,7 +155,8 @@ handle_async_as_batch(BatchEnabled, {_, Messages}, PrevState)->
     FinalMessages = case Messages of Bin when is_binary(Bin)-> Bin; _ -> lists:reverse(Messages) end,
     {MessageSets,State} = ekaf_lib:cursor(BatchEnabled, FinalMessages, PrevState),
     spawn_async_as_batch(BatchEnabled,MessageSets, State),
-    fsm_next_state(ready, State, State#ekaf_fsm.buffer_ttl).
+    KV=dict:append({cor_id, State#ekaf_fsm.cor_id}, {?EKAF_PACKET_DECODE_PRODUCE_ASYNC_BATCH, undefined}, State#ekaf_fsm.kv),
+    fsm_next_state(ready, State#ekaf_fsm{kv=KV}, State#ekaf_fsm.buffer_ttl).
 
 spawn_async_as_batch(_,[],_)->
     ok;
@@ -421,3 +424,12 @@ fsm_next_state(StateName,State)->
     {next_state, StateName, State}.
 fsm_next_state(StateName, State, Timeout)->
     {next_state, StateName, State, Timeout}.
+
+check_response_if_no_longer_leader(Response, TopicName, PartitionId) ->
+    %% ErrorCode = 6: NotLeaderForPartition, ErrorCode = 5: LeaderNotAvailable
+    #produce_response{topics=Topics} = Response,
+    ErrorCodes =
+        [[ErrorCode || #partition{error_code=ErrorCode, id=Partition} <- Partitions,
+                       ErrorCode =:= 6 orelse ErrorCode =:= 5, Partition =:= PartitionId] %% 6 -> No longer 
+            || #topic{name=Topic, partitions=Partitions} <- Topics, Topic =:= TopicName],
+    length(lists:flatten(ErrorCodes)) > 0.
